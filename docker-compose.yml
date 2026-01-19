@@ -1,0 +1,61 @@
+services:
+  rabbitmq:
+    image: rabbitmq:3-management
+    environment:
+      RABBITMQ_DEFAULT_USER: mall
+      RABBITMQ_DEFAULT_PASS: mall
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+
+  api-product:
+    build: ./api-product
+    env_file: ./api-product/.env
+    ports: ["3005:3005"]
+
+  api-customer:
+    build: ./api-customer
+    env_file: ./api-customer/.env
+    ports: ["3006:3006"]
+
+  api-cart:
+    build: ./api-cart
+    env_file: ./api-cart/.env
+    ports: ["3007:3007"]
+    depends_on: [api-product]
+
+  api-order:
+    build: ./api-order
+    env_file: ./api-order/.env
+    ports: ["3008:3008"]
+    depends_on: [api-cart]
+
+  api-payment:
+    build: ./api-payment
+    env_file: ./api-payment/.env
+    ports: ["3001:3001"]
+    depends_on: [rabbitmq]
+
+  api-delivery:
+    build: ./api-delivery
+    env_file: ./api-delivery/.env
+    ports: ["3003:3003"]
+    depends_on: [rabbitmq]
+
+  api-delivery-consumer:
+    build: ./api-delivery
+    env_file: ./api-delivery/.env
+    command: ["node","src/consumer.js"]
+    depends_on: [rabbitmq]
+
+  api-wms:
+    build: ./api-wms
+    env_file: ./api-wms/.env
+    ports: ["3002:3002"]
+    depends_on: [rabbitmq]
+
+  api-wms-consumer:
+    build: ./api-wms
+    env_file: ./api-wms/.env
+    command: ["node","src/consumer.js"]
+    depends_on: [rabbitmq]
