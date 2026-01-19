@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        svc: [api-product, api-customer, api-cart, api-order, api-payment, api-delivery, api-wms]
+        svc: [api-product, api-customer, api-cart, api-order, api-payment, api-delivery, api-wms, api-review]
 
     steps:
       - uses: actions/checkout@v4
