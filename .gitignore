@@ -10,3 +10,7 @@ yarn-error.log*
 .env.*
 !.env.example
 !**/.env.example
+
+# node
+**/node_modules
+**/.env
