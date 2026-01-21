@@ -16,7 +16,7 @@ app.use(morgan("dev"));
 
 app.use("/health", health);
 app.use("/categories", categories);
-app.use("/", products);
+app.use("/products", products);
 
 app.use((req, res) => res.status(404).json({ ok: false, error: "NOT_FOUND" }));
 app.use((err, req, res, next) => {
