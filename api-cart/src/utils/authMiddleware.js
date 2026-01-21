@@ -9,7 +9,7 @@ function isTrustMode() {
 }
 
 function trustUserFromHeader(req) {
-  const raw = req.get("X-Customer-Id");
+  const raw = (req.get("X-User-Id") || req.get("X-Customer-Id"));
   const id = Number(raw);
   req.user = req.user || {};
   req.user.customer_id = Number.isFinite(id) && id > 0 ? id : 1; // default 1
