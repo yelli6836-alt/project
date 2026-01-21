@@ -6,7 +6,7 @@ const app = express();
 app.use(express.json({ limit: "1mb" }));
 
 app.use("/health", health);
-app.use("/payments", payments);
+app.use("/", payments);
 
 app.use((req, res) => res.status(404).json({ ok: false, error: "NOT_FOUND" }));
 app.use((err, req, res, next) => {

@@ -15,7 +15,7 @@ app.use(express.json({ limit: "1mb" }));
 app.use(morgan("dev"));
 
 app.use("/health", health);
-app.use("/cart", cart);
+app.use("/", cart);
 app.use("/wishlist", wishlist);
 
 app.use((req, res) => res.status(404).json({ ok: false, error: "NOT_FOUND" }));
