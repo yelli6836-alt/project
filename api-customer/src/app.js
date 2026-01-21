@@ -19,7 +19,6 @@ app.use("/auth", auth);
 app.use("/me", me);
 
 app.use((req, res) => res.status(404).json({ ok: false, error: "NOT_FOUND" }));
-
 app.use((err, req, res, next) => {
   console.error(err);
   res.status(500).json({ ok: false, error: "INTERNAL_ERROR", message: err.message });

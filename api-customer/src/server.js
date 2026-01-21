@@ -5,7 +5,7 @@ const { pool } = require("./db");
 async function start() {
   await pool.query("SELECT 1");
   app.listen(port, "0.0.0.0", () => {
-    console.log(`[api-customer] listening on :${port}`);
+    console.log("[api-customer] listening on :" + port);
   });
 }
 

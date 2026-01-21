@@ -1,29 +1,7 @@
 const { pool } = require("../db");
 const rabbit = require("../rabbit");
-const config = require("../config");
 const { randomUUID } = require("crypto");
-
-async function pingDb(req, res) {
-  const [rows] = await pool.query("SELECT DATABASE() AS db, NOW() AS now");
-  res.json({ ok: true, ...rows[0] });
-}
-
-async function testPublish(req, res) {
-  const event = {
-    eventId: randomUUID(),
-    occurredAt: new Date().toISOString(),
-    type: "payment.order.paid",
-    data: {
-      orderNumber: "ORD-TEST-0001",
-      customerId: 1,
-      items: [{ skuid: "SKU-101", qty: 1 }],
-      totalAmount: 12000,
-    },
-  };
-
-  await rabbit.publish(config.rabbit.routingKey, event);
-  res.json({ ok: true, published: true, routingKey: config.rabbit.routingKey });
-}
+const { rabbit: rabbitCfg } = require("../config");
 
 async function approve(req, res) {
   const orderNumber = String(req.body.orderNumber || "").trim();
@@ -40,14 +18,12 @@ async function approve(req, res) {
         WHERE order_number = ? FOR UPDATE`,
       [orderNumber]
     );
-
     if (!orderRows.length) {
       await conn.rollback();
       return res.status(404).json({ ok: false, error: "ORDER_NOT_FOUND" });
     }
 
     const order = orderRows[0];
-
     if (String(order.order_status).toUpperCase() === "PAID") {
       await conn.commit();
       return res.json({ ok: true, alreadyPaid: true, orderNumber });
@@ -64,10 +40,7 @@ async function approve(req, res) {
     await conn.commit();
 
     const [itemRows] = await pool.query(
-      `SELECT skuid, qty
-         FROM order_items
-        WHERE order_id = ?
-        ORDER BY order_item_id ASC`,
+      `SELECT skuid, qty FROM order_items WHERE order_id = ? ORDER BY order_item_id ASC`,
       [order.order_id]
     );
 
@@ -83,9 +56,14 @@ async function approve(req, res) {
       },
     };
 
-    await rabbit.publish(config.rabbit.routingKey, event);
+    try {
+      await rabbit.publish(rabbitCfg.routingKey, event);
+    } catch (e) {
+      // MQ 없거나 장애여도 데모 플로우는 계속
+      return res.json({ ok: true, orderNumber: order.order_number, paid: true, mq: "FAILED_OR_DISABLED", reason: e.message });
+    }
 
-    res.json({ ok: true, orderNumber: order.order_number, published: true, eventId: event.eventId });
+    res.json({ ok: true, orderNumber: order.order_number, paid: true, published: true, eventId: event.eventId });
   } catch (e) {
     try { await conn.rollback(); } catch {}
     throw e;
@@ -94,4 +72,20 @@ async function approve(req, res) {
   }
 }
 
-module.exports = { pingDb, testPublish, approve };
+async function testPublish(req, res) {
+  const event = {
+    eventId: randomUUID(),
+    occurredAt: new Date().toISOString(),
+    type: "payment.order.paid",
+    data: { orderNumber: "ORD-TEST-0001", customerId: 1, items: [{ skuid: "SKU-101", qty: 1 }], totalAmount: 12000 },
+  };
+
+  try {
+    await rabbit.publish(rabbitCfg.routingKey, event);
+    res.json({ ok: true, published: true });
+  } catch (e) {
+    res.status(501).json({ ok: false, error: "MQ_DISABLED_OR_FAILED", message: e.message });
+  }
+}
+
+module.exports = { approve, testPublish };

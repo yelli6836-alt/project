@@ -2,10 +2,6 @@ const { connect } = require("./rabbit");
 const { pool } = require("./db");
 const { rabbit } = require("./config");
 
-function safeJson(buf) {
-  try { return JSON.parse(buf.toString("utf8")); } catch { return null; }
-}
-
 async function ensureDefaultCenter(conn) {
   await conn.query(
     `INSERT INTO centers (center_id, center_name)
@@ -19,20 +15,17 @@ async function handlePaid(event) {
   const orderNumber = event?.data?.orderNumber;
   const customerId = event?.data?.customerId ?? null;
 
-  if (!eventId || !orderNumber) throw new Error("INVALID_EVENT_PAYLOAD");
+  if (!eventId || !orderNumber) throw new Error("INVALID_EVENT");
 
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
 
-    const [inbox] = await conn.query(
+    const [dup] = await conn.query(
       `SELECT event_id FROM inbox_events WHERE event_id=? FOR UPDATE`,
       [eventId]
     );
-    if (inbox.length) {
-      await conn.rollback();
-      return { duplicated: true };
-    }
+    if (dup.length) { await conn.rollback(); return { duplicated: true }; }
 
     await conn.query(`INSERT INTO inbox_events (event_id) VALUES (?)`, [eventId]);
 
@@ -57,32 +50,23 @@ async function handlePaid(event) {
 
 async function main() {
   const { conn, ch } = await connect();
-  console.log(`[api-delivery] consumer connected. waiting queue=${rabbit.queue}`);
+  console.log("[api-delivery] consuming queue=" + rabbit.queue);
 
-  ch.consume(
-    rabbit.queue,
-    async (msg) => {
-      if (!msg) return;
-      const evt = safeJson(msg.content);
+  ch.consume(rabbit.queue, async (msg) => {
+    if (!msg) return;
+    try {
+      const event = JSON.parse(msg.content.toString("utf8"));
+      if (event.type !== "payment.order.paid") { ch.ack(msg); return; }
 
-      try {
-        if (!evt || evt.type !== "payment.order.paid") {
-          ch.ack(msg);
-          return;
-        }
-
-        const result = await handlePaid(evt);
-        ch.ack(msg);
-
-        if (result.duplicated) console.log("[delivery] duplicated ignored:", evt.eventId);
-        else console.log("[delivery] order READY created:", evt.data.orderNumber);
-      } catch (e) {
-        console.error("[delivery] failed:", e.message);
-        ch.nack(msg, false, true);
-      }
-    },
-    { noAck: false }
-  );
+      const r = await handlePaid(event);
+      ch.ack(msg);
+      if (r.duplicated) console.log("[delivery] duplicated ignored:", event.eventId);
+      else console.log("[delivery] READY created:", event.data.orderNumber);
+    } catch (e) {
+      console.error("[delivery] failed:", e.message);
+      ch.nack(msg, false, true);
+    }
+  }, { noAck: false });
 
   process.on("SIGINT", async () => {
     try { await ch.close(); } catch {}

@@ -15,19 +15,9 @@ router.get("/", asyncWrap(async (req, res) => {
   const where = [];
   const params = { limit: size, offset };
 
-  if (categoryId) {
-    where.push("i.category_id = :categoryId");
-    params.categoryId = categoryId;
-  }
-  if (status) {
-    where.push("i.status = :status");
-    params.status = status;
-  }
-  if (q) {
-    // FULLTEXT가 있으면 MATCH가 빠름. 없으면 LIKE로 바꿔도 됨.
-    where.push("MATCH(i.item_name, i.item_desc) AGAINST(:q IN BOOLEAN MODE)");
-    params.q = q + "*";
-  }
+  if (categoryId) { where.push("i.category_id = :categoryId"); params.categoryId = categoryId; }
+  if (status) { where.push("i.status = :status"); params.status = status; }
+  if (q) { where.push("MATCH(i.item_name, i.item_desc) AGAINST(:q IN BOOLEAN MODE)"); params.q = q + "*"; }
 
   const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
 
@@ -39,24 +29,21 @@ router.get("/", asyncWrap(async (req, res) => {
   );
 
   const [rows] = await pool.query(
-    `SELECT
-        i.item_id, i.category_id, i.item_name, i.base_cost, i.status, i.created_at,
-        c.category_name
+    `SELECT i.item_id, i.category_id, i.item_name, i.base_cost, i.status, i.created_at,
+            c.category_name
        FROM item i
        JOIN category c ON c.category_id = i.category_id
        ${whereSql}
-       ORDER BY i.item_id DESC
-       LIMIT :limit OFFSET :offset`,
+      ORDER BY i.item_id DESC
+      LIMIT :limit OFFSET :offset`,
     params
   );
 
   res.json({ ok: true, page, size, total: countRows[0].total, items: rows });
 }));
 
-// GET /products/:itemId
 router.get("/:itemId", asyncWrap(async (req, res) => {
   const itemId = Number(req.params.itemId);
-
   const [rows] = await pool.query(
     `SELECT i.item_id, i.category_id, i.item_name, i.base_cost, i.item_desc, i.status, i.created_at,
             c.category_name
@@ -65,15 +52,12 @@ router.get("/:itemId", asyncWrap(async (req, res) => {
       WHERE i.item_id = ?`,
     [itemId]
   );
-
   if (!rows.length) return res.status(404).json({ ok: false, error: "ITEM_NOT_FOUND" });
   res.json({ ok: true, item: rows[0] });
 }));
 
-// GET /products/:itemId/images
 router.get("/:itemId/images", asyncWrap(async (req, res) => {
   const itemId = Number(req.params.itemId);
-
   const [rows] = await pool.query(
     `SELECT image_id, item_id, url, display_order, created_at
        FROM item_image
@@ -81,14 +65,11 @@ router.get("/:itemId/images", asyncWrap(async (req, res) => {
       ORDER BY display_order IS NULL, display_order ASC, image_id ASC`,
     [itemId]
   );
-
   res.json({ ok: true, images: rows });
 }));
 
-// GET /products/:itemId/options
 router.get("/:itemId/options", asyncWrap(async (req, res) => {
   const itemId = Number(req.params.itemId);
-
   const [rows] = await pool.query(
     `SELECT option_id, item_id, option_name, option_value, add_cost, skuid, created_at
        FROM item_option
@@ -96,7 +77,6 @@ router.get("/:itemId/options", asyncWrap(async (req, res) => {
       ORDER BY option_id ASC`,
     [itemId]
   );
-
   res.json({ ok: true, options: rows });
 }));
 

@@ -1,12 +1,8 @@
 {
   "name": "api-customer",
   "version": "1.0.0",
-  "private": true,
   "main": "src/server.js",
-  "engines": { "node": ">=18" },
-  "scripts": {
-    "start": "node src/server.js"
-  },
+  "scripts": { "start": "node src/server.js" },
   "dependencies": {
     "bcrypt": "^5.1.1",
     "cors": "^2.8.5",

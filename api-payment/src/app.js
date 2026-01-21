@@ -1,20 +1,17 @@
 const express = require("express");
-const healthRouter = require("./routes/health");
-const paymentsRouter = require("./routes/payments");
+const health = require("./routes/health");
+const payments = require("./routes/payments");
 
-function createApp() {
-  const app = express();
-  app.use(express.json());
+const app = express();
+app.use(express.json({ limit: "1mb" }));
 
-  app.use("/health", healthRouter);
-  app.use("/payments", paymentsRouter);
+app.use("/health", health);
+app.use("/payments", payments);
 
-  app.use((err, req, res, next) => {
-    console.error(err);
-    res.status(500).json({ ok: false, error: err.message || "server error" });
-  });
+app.use((req, res) => res.status(404).json({ ok: false, error: "NOT_FOUND" }));
+app.use((err, req, res, next) => {
+  console.error(err);
+  res.status(500).json({ ok: false, error: "INTERNAL_ERROR", message: err.message });
+});
 
-  return app;
-}
-
-module.exports = { createApp };
+module.exports = { app };

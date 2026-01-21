@@ -1,10 +1,5 @@
 require("dotenv").config();
-
-function must(name) {
-  const v = process.env[name];
-  if (!v) throw new Error(`Missing env: ${name}`);
-  return v;
-}
+function must(name) { const v = process.env[name]; if (!v) throw new Error(`Missing env: ${name}`); return v; }
 
 module.exports = {
   port: Number(process.env.PORT || 3003),
@@ -17,9 +12,8 @@ module.exports = {
     connectionLimit: Number(process.env.DB_POOL_LIMIT || 10),
   },
   rabbit: {
-    url: must("RABBITMQ_URL"),
+    url: process.env.RABBITMQ_URL || "",
     exchange: must("RABBITMQ_EXCHANGE"),
-    exchangeType: process.env.RABBITMQ_EXCHANGE_TYPE || "topic",
     queue: must("RABBITMQ_QUEUE"),
     routingKey: must("RABBITMQ_ROUTING_KEY"),
   },

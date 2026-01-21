@@ -1,32 +1,41 @@
 const { pool } = require("../db");
 
+// GET /wms/stock/:skuid
 async function getStockBySkuid(req, res) {
-  const skuid = String(req.params.skuid);
+  const skuid = String(req.params.skuid || "").trim();
+  if (!skuid) return res.status(400).json({ ok: false, error: "MISSING_SKUID" });
 
-  const [items] = await pool.query(
-    `SELECT itemID, SKUID, item_name
-       FROM item_name
-      WHERE SKUID = :skuid`,
+  const [skuRows] = await pool.query(
+    `SELECT skuid, sku_name
+       FROM sku_master
+      WHERE skuid = :skuid
+      LIMIT 1`,
+    { skuid }
+  );
+  if (!skuRows.length) return res.status(404).json({ ok: false, error: "SKUID_NOT_FOUND" });
+
+  const [[sumRow]] = await pool.query(
+    `SELECT COALESCE(SUM(qty), 0) AS total_qty
+       FROM inventory
+      WHERE skuid = :skuid`,
     { skuid }
   );
 
-  if (!items.length) return res.status(404).json({ ok: false, error: "SKUID_NOT_FOUND" });
-
-  const item = items[0];
-
-  const [rows] = await pool.query(
-    `SELECT COALESCE(SUM(unit), 0) AS total_qty
+  const [topPlaces] = await pool.query(
+    `SELECT place_id, qty
        FROM inventory
-      WHERE itemID = :itemID`,
-    { itemID: item.itemID }
+      WHERE skuid = :skuid
+      ORDER BY qty DESC
+      LIMIT 5`,
+    { skuid }
   );
 
   res.json({
     ok: true,
-    skuid: item.SKUID,
-    itemID: item.itemID,
-    itemName: item.item_name,
-    totalQty: Number(rows[0].total_qty || 0),
+    skuid: skuRows[0].skuid,
+    skuName: skuRows[0].sku_name,
+    totalQty: Number(sumRow.total_qty || 0),
+    topPlaces: topPlaces.map((r) => ({ place_id: r.place_id, qty: Number(r.qty || 0) })),
   });
 }
 

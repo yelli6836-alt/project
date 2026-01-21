@@ -2,8 +2,7 @@ const router = require("express").Router();
 const asyncWrap = require("../utils/asyncWrap");
 const ctrl = require("../controllers/payments.controller");
 
-router.get("/ping-db", asyncWrap(ctrl.pingDb));
-router.post("/test-publish", asyncWrap(ctrl.testPublish));
 router.post("/approve", asyncWrap(ctrl.approve));
+router.post("/test-publish", asyncWrap(ctrl.testPublish));
 
 module.exports = router;

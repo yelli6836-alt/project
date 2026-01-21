@@ -3,6 +3,7 @@ const { pool } = require("../db");
 const asyncWrap = require("../utils/asyncWrap");
 const { authMiddleware } = require("../utils/authMiddleware");
 
+// GET /me
 router.get("/", authMiddleware, asyncWrap(async (req, res) => {
   const customerId = req.user.customer_id;
 
@@ -12,7 +13,6 @@ router.get("/", authMiddleware, asyncWrap(async (req, res) => {
   );
 
   if (!rows.length) return res.status(404).json({ ok: false, error: "USER_NOT_FOUND" });
-
   res.json({ ok: true, me: rows[0] });
 }));
 

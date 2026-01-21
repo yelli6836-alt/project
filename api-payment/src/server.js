@@ -1,28 +1,18 @@
-const config = require("./config");
-const { createApp } = require("./app");
-const { pingDb } = require("./db");
-const { initRabbit, closeRabbit } = require("./rabbit");
+const { app } = require("./app");
+const { port } = require("./config");
+const { pool } = require("./db");
+const { initRabbit } = require("./rabbit");
 
-async function bootstrap() {
-  const dbOk = await pingDb();
-  if (!dbOk) throw new Error("[db] ping failed");
+async function start() {
+  await pool.query("SELECT 1");
+  await initRabbit().catch(() => null); // MQ 없어도 서버는 뜨게
 
-  await initRabbit();
-
-  const app = createApp();
-  const server = app.listen(config.port, "0.0.0.0", () => {
-    console.log(`[api-payment] listening on :${config.port}`);
-  });
-
-  process.on("SIGINT", async () => {
-    console.log("SIGINT received, shutting down...");
-    server.close();
-    await closeRabbit();
-    process.exit(0);
+  app.listen(port, "0.0.0.0", () => {
+    console.log("[api-payment] listening on :" + port);
   });
 }
 
-bootstrap().catch((e) => {
-  console.error(e);
+start().catch((e) => {
+  console.error("Failed to start:", e);
   process.exit(1);
 });

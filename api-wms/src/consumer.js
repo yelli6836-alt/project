@@ -2,97 +2,126 @@ const { connectRabbit } = require("./rabbit");
 const { pool } = require("./db");
 const { rabbit, wms } = require("./config");
 
-function safeJson(buf) {
-  try { return JSON.parse(buf.toString("utf8")); } catch { return null; }
-}
+function safeJson(buf) { try { return JSON.parse(buf.toString("utf8")); } catch { return null; } }
+function asStr(v) { return String(v ?? "").trim(); }
+function asPosInt(v) { const n = Number(v); return Number.isFinite(n) && n > 0 ? Math.floor(n) : null; }
 
-async function handlePaidEvent(evt, conn) {
-  if (!evt || evt.type !== "payment.order.paid") throw new Error("INVALID_EVENT_TYPE");
-
-  const eventId = String(evt.eventId || "");
-  if (!eventId) throw new Error("MISSING_eventId");
-
-  const orderNumber = String(evt.data?.orderNumber || "");
-  const items = Array.isArray(evt.data?.items) ? evt.data.items : [];
-  if (!orderNumber || items.length === 0) throw new Error("MISSING_ORDER_OR_ITEMS");
-
-  // inbox_events 멱등
-  const [inbox] = await conn.query(
-    `SELECT event_id FROM inbox_events WHERE event_id = :event_id LIMIT 1 FOR UPDATE`,
-    { event_id: eventId }
-  );
-  if (inbox.length) return { duplicated: true };
-
-  await conn.query(
-    `INSERT INTO inbox_events(event_id) VALUES(:event_id)`,
-    { event_id: eventId }
-  );
-
-  for (const it of items) {
-    const skuid = String(it.skuid || "");
-    const qty = Number(it.qty || 0);
-    if (!skuid || qty <= 0) throw new Error("INVALID_ITEM");
-
-    const [r] = await conn.query(
-      `SELECT itemID FROM item_name WHERE SKUID = :skuid`,
-      { skuid }
+async function pickPlaceIdForDeduct(conn, skuid, qty, preferPlaceId) {
+  if (Number.isFinite(preferPlaceId) && preferPlaceId > 0) {
+    const [rows] = await conn.query(
+      `SELECT place_id, qty FROM inventory
+        WHERE place_id = :place_id AND skuid = :skuid
+        FOR UPDATE`,
+      { place_id: preferPlaceId, skuid }
     );
-    if (!r.length) throw new Error(`SKUID_NOT_FOUND: ${skuid}`);
-    const itemID = r[0].itemID;
-
-    await conn.query(
-      `INSERT INTO stock_reservations(order_number, skuid, qty, placeID, status)
-       VALUES(:order_number, :skuid, :qty, :placeID, 'RESERVED')
-       ON DUPLICATE KEY UPDATE qty = VALUES(qty)`,
-      { order_number: orderNumber, skuid, qty, placeID: wms.deductPlaceId }
-    );
-
-    const [u] = await conn.query(
-      `UPDATE inventory
-          SET unit = unit - :qty
-        WHERE itemID = :itemID AND placeID = :placeID AND unit >= :qty`,
-      { qty, itemID, placeID: wms.deductPlaceId }
-    );
-
-    if (u.affectedRows !== 1) {
-      throw new Error(`INSUFFICIENT_STOCK (skuid=${skuid}, placeID=${wms.deductPlaceId}, qty=${qty})`);
-    }
-
-    await conn.query(
-      `UPDATE stock_reservations
-          SET status='DEDUCTED'
-        WHERE order_number=:order_number AND skuid=:skuid`,
-      { order_number: orderNumber, skuid }
-    );
+    if (rows.length && Number(rows[0].qty) >= qty) return Number(rows[0].place_id);
   }
 
-  return { duplicated: false };
+  const [alt] = await conn.query(
+    `SELECT place_id, qty FROM inventory
+      WHERE skuid = :skuid AND qty >= :qty
+      ORDER BY qty DESC
+      LIMIT 1
+      FOR UPDATE`,
+    { skuid, qty }
+  );
+  if (!alt.length) throw new Error(`INSUFFICIENT_STOCK (skuid=${skuid}, qty=${qty})`);
+  return Number(alt[0].place_id);
+}
+
+async function handlePaidEvent(evt) {
+  if (!evt || evt.type !== "payment.order.paid") throw new Error("INVALID_EVENT_TYPE");
+
+  const eventId = asStr(evt.eventId);
+  const orderNumber = asStr(evt.data?.orderNumber);
+  const items = Array.isArray(evt.data?.items) ? evt.data.items : [];
+
+  if (!eventId) throw new Error("MISSING_eventId");
+  if (!orderNumber) throw new Error("MISSING_orderNumber");
+  if (!items.length) throw new Error("MISSING_items");
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    const [dup] = await conn.query(
+      `SELECT event_id FROM inbox_events WHERE event_id = :event_id FOR UPDATE`,
+      { event_id: eventId }
+    );
+    if (dup.length) { await conn.rollback(); return { duplicated: true }; }
+
+    await conn.query(
+      `INSERT INTO inbox_events(event_id, event_type, payload)
+       VALUES (:event_id, :event_type, :payload)`,
+      { event_id: eventId, event_type: "payment.order.paid", payload: JSON.stringify(evt) }
+    );
+
+    for (const it of items) {
+      const skuid = asStr(it.skuid);
+      const qty = asPosInt(it.qty);
+      if (!skuid || !qty) throw new Error("INVALID_ITEM");
+
+      const [skuRows] = await conn.query(
+        `SELECT skuid FROM sku_master WHERE skuid = :skuid LIMIT 1`,
+        { skuid }
+      );
+      if (!skuRows.length) throw new Error(`SKUID_NOT_FOUND: ${skuid}`);
+
+      const placeId = await pickPlaceIdForDeduct(conn, skuid, qty, wms.deductPlaceId);
+
+      await conn.query(
+        `INSERT INTO stock_reservations(order_number, skuid, qty, status, place_id)
+         VALUES (:order_number, :skuid, :qty, 'RESERVED', :place_id)
+         ON DUPLICATE KEY UPDATE
+           qty = VALUES(qty),
+           place_id = VALUES(place_id),
+           status = 'RESERVED'`,
+        { order_number: orderNumber, skuid, qty, place_id: placeId }
+      );
+
+      const [u] = await conn.query(
+        `UPDATE inventory
+            SET qty = qty - :qty
+          WHERE place_id = :place_id AND skuid = :skuid AND qty >= :qty`,
+        { qty, place_id: placeId, skuid }
+      );
+      if (u.affectedRows !== 1) throw new Error(`DEDUCT_FAILED (skuid=${skuid}, place_id=${placeId}, qty=${qty})`);
+
+      await conn.query(
+        `UPDATE stock_reservations
+            SET status = 'DEDUCTED'
+          WHERE order_number = :order_number AND skuid = :skuid`,
+        { order_number: orderNumber, skuid }
+      );
+    }
+
+    await conn.commit();
+    return { duplicated: false };
+  } catch (e) {
+    try { await conn.rollback(); } catch {}
+    throw e;
+  } finally {
+    conn.release();
+  }
 }
 
 async function start() {
   const { conn, ch } = await connectRabbit();
-
   ch.prefetch(10);
-  console.log(`[api-wms] consuming queue=${rabbit.queue}`);
 
+  console.log("[api-wms] consuming queue=" + rabbit.queue);
   ch.consume(rabbit.queue, async (msg) => {
     if (!msg) return;
-
     const evt = safeJson(msg.content);
 
-    const db = await pool.getConnection();
     try {
-      await db.beginTransaction();
-      const r = await handlePaidEvent(evt, db);
-      await db.commit();
+      const r = await handlePaidEvent(evt);
       ch.ack(msg);
       if (r.duplicated) console.log("[api-wms] duplicated ignored:", evt?.eventId);
+      else console.log("[api-wms] deducted order:", evt?.data?.orderNumber);
     } catch (e) {
-      try { await db.rollback(); } catch {}
       console.error("[api-wms] consume error:", e.message);
       ch.nack(msg, false, true);
-    } finally {
-      db.release();
     }
   }, { noAck: false });
 
@@ -103,7 +132,4 @@ async function start() {
   });
 }
 
-start().catch((e) => {
-  console.error("Failed to start consumer:", e);
-  process.exit(1);
-});
+start().catch((e) => { console.error("Failed to start consumer:", e); process.exit(1); });

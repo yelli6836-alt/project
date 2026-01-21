@@ -1,15 +1,13 @@
 {
   "name": "api-wms",
   "version": "1.0.0",
-  "private": true,
   "main": "src/server.js",
-  "engines": { "node": ">=18" },
   "scripts": {
     "start": "node src/server.js",
     "consumer": "node src/consumer.js"
   },
   "dependencies": {
-    "amqplib": "^0.10.4",
+    "amqplib": "^0.10.5",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",

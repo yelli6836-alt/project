@@ -1,10 +1,5 @@
 require("dotenv").config();
-
-function must(name) {
-  const v = process.env[name];
-  if (!v) throw new Error(`Missing env: ${name}`);
-  return v;
-}
+function must(name) { const v = process.env[name]; if (!v) throw new Error(`Missing env: ${name}`); return v; }
 
 module.exports = {
   port: Number(process.env.PORT || 3005),

@@ -1,31 +1,28 @@
-const amqplib = require("amqplib");
-const config = require("./config");
+const amqp = require("amqplib");
+const { rabbit } = require("./config");
 
-let conn;
-let ch;
+let conn, ch;
 
 async function initRabbit() {
-  conn = await amqplib.connect(config.rabbit.url);
+  if (!rabbit.url) return null; // MQ 비활성 허용
+  conn = await amqp.connect(rabbit.url);
   ch = await conn.createChannel();
-
-  await ch.assertExchange(config.rabbit.exchange, config.rabbit.exchangeType, { durable: true });
+  await ch.assertExchange(rabbit.exchange, rabbit.exchangeType, { durable: true });
   return ch;
 }
 
 async function publish(routingKey, payload) {
-  if (!ch) throw new Error("[rabbit] channel not initialized");
+  if (!rabbit.url) throw new Error("MQ_DISABLED");
+  if (!ch) throw new Error("MQ_NOT_INITIALIZED");
   const buf = Buffer.from(JSON.stringify(payload));
-  return ch.publish(config.rabbit.exchange, routingKey, buf, {
-    contentType: "application/json",
-    persistent: true,
-  });
+  ch.publish(rabbit.exchange, routingKey, buf, { contentType: "application/json", persistent: true });
+  return true;
 }
 
 async function closeRabbit() {
   try { if (ch) await ch.close(); } catch {}
   try { if (conn) await conn.close(); } catch {}
-  ch = null;
-  conn = null;
+  ch = null; conn = null;
 }
 
 module.exports = { initRabbit, publish, closeRabbit };

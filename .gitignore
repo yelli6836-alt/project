@@ -1,16 +1,9 @@
-node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-.env
-.env.*
-!.env.example
-.DS_Store
-.env
-.env.*
-!.env.example
-!**/.env.example
-
-# node
-**/node_modules
+**/node_modules/
 **/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/*.crt
+**/dist/
+**/build/
+.DS_Store

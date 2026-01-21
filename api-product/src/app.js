@@ -18,19 +18,10 @@ app.use("/health", health);
 app.use("/categories", categories);
 app.use("/products", products);
 
-// 404
-app.use((req, res) => {
-  res.status(404).json({ ok: false, error: "NOT_FOUND" });
-});
-
-// error handler
+app.use((req, res) => res.status(404).json({ ok: false, error: "NOT_FOUND" }));
 app.use((err, req, res, next) => {
   console.error(err);
-  res.status(500).json({
-    ok: false,
-    error: "INTERNAL_ERROR",
-    message: err.message,
-  });
+  res.status(500).json({ ok: false, error: "INTERNAL_ERROR", message: err.message });
 });
 
 module.exports = { app };

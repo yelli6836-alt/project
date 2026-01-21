@@ -1,5 +1,6 @@
 const router = require("express").Router();
 const crypto = require("crypto");
+const axios = require("axios");
 const asyncWrap = require("../utils/asyncWrap");
 const { authMiddleware } = require("../utils/authMiddleware");
 const { pool } = require("../db");
@@ -90,10 +91,8 @@ async function createOrderTx(conn, customerId, items, extra) {
   return { order_id: orderId, order_number: orderNumber, total_amount: totalAmount };
 }
 
-/* GET /orders */
 router.get("/", authMiddleware, asyncWrap(async (req, res) => {
   const customerId = req.user.customer_id;
-
   const page = Math.max(1, Number(req.query.page || 1));
   const size = Math.min(50, Math.max(1, Number(req.query.size || 20)));
   const offset = (page - 1) * size;
@@ -115,7 +114,6 @@ router.get("/", authMiddleware, asyncWrap(async (req, res) => {
   res.json({ ok: true, page, size, total: countRows[0].total, orders: rows });
 }));
 
-/* POST /orders */
 router.post("/", authMiddleware, asyncWrap(async (req, res) => {
   const customerId = req.user.customer_id;
   const items = normalizeItems(req.body?.items);
@@ -135,18 +133,22 @@ router.post("/", authMiddleware, asyncWrap(async (req, res) => {
   }
 }));
 
-/* POST /orders/from-cart */
 router.post("/from-cart", authMiddleware, asyncWrap(async (req, res) => {
   const customerId = req.user.customer_id;
   if (!cartCfg.baseUrl) return res.status(501).json({ ok: false, error: "CART_API_NOT_CONFIGURED" });
 
   const auth = req.headers.authorization;
+  const xcid = req.headers["x-customer-id"];
 
-  const cartResp = await fetch(`${cartCfg.baseUrl}/cart`, { headers: { Authorization: auth } });
-  if (!cartResp.ok) return res.status(502).json({ ok: false, error: "CART_API_ERROR" });
+  const cartResp = await axios.get(`${cartCfg.baseUrl}/cart`, {
+    timeout: 5000,
+    headers: {
+      ...(auth ? { Authorization: auth } : {}),
+      ...(xcid ? { "X-Customer-Id": xcid } : {}),
+    },
+  });
 
-  const cartJson = await cartResp.json();
-  const cartItems = Array.isArray(cartJson.items) ? cartJson.items : [];
+  const cartItems = Array.isArray(cartResp?.data?.items) ? cartResp.data.items : [];
   if (!cartItems.length) return res.status(400).json({ ok: false, error: "CART_EMPTY" });
 
   const items = normalizeItems(cartItems.map((it) => ({
@@ -157,7 +159,6 @@ router.post("/from-cart", authMiddleware, asyncWrap(async (req, res) => {
     item_id: it.item_id,
     option_id: it.option_id,
   })));
-
   if (!items) return res.status(400).json({ ok: false, error: "INVALID_CART_ITEM" });
 
   const conn = await pool.getConnection();
@@ -167,11 +168,15 @@ router.post("/from-cart", authMiddleware, asyncWrap(async (req, res) => {
     await conn.commit();
 
     // cart clear (실패해도 주문은 성공)
-    const clearResp = await fetch(`${cartCfg.baseUrl}/cart/clear`, {
-      method: "DELETE",
-      headers: { Authorization: auth },
-    });
-    if (!clearResp.ok) {
+    try {
+      await axios.delete(`${cartCfg.baseUrl}/cart/clear`, {
+        timeout: 5000,
+        headers: {
+          ...(auth ? { Authorization: auth } : {}),
+          ...(xcid ? { "X-Customer-Id": xcid } : {}),
+        },
+      });
+    } catch {
       return res.status(201).json({ ok: true, order: created, warn: "ORDER_CREATED_BUT_CART_CLEAR_FAILED" });
     }
 
@@ -184,7 +189,6 @@ router.post("/from-cart", authMiddleware, asyncWrap(async (req, res) => {
   }
 }));
 
-/* POST /orders/:orderNumber/cancel  (CREATED -> CANCELED) */
 router.post("/:orderNumber/cancel", authMiddleware, asyncWrap(async (req, res) => {
   const customerId = req.user.customer_id;
   const orderNumber = String(req.params.orderNumber || "").trim();
@@ -200,7 +204,6 @@ router.post("/:orderNumber/cancel", authMiddleware, asyncWrap(async (req, res) =
   res.json({ ok: true, canceled: true, order_number: orderNumber });
 }));
 
-/* GET /orders/:orderNumber */
 router.get("/:orderNumber", authMiddleware, asyncWrap(async (req, res) => {
   const customerId = req.user.customer_id;
   const orderNumber = String(req.params.orderNumber || "").trim();

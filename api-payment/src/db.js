@@ -1,20 +1,14 @@
 const mysql = require("mysql2/promise");
-const config = require("./config");
+const { db } = require("./config");
 
 const pool = mysql.createPool({
-  host: config.db.host,
-  port: config.db.port,
-  user: config.db.user,
-  password: config.db.pass,
-  database: config.db.name,
+  host: db.host,
+  port: db.port,
+  user: db.user,
+  password: db.password,
+  database: db.database,
   waitForConnections: true,
-  connectionLimit: config.db.poolLimit,
-  queueLimit: 0,
+  connectionLimit: db.connectionLimit,
 });
 
-async function pingDb() {
-  const [rows] = await pool.query("SELECT 1 AS ok");
-  return rows && rows[0] && rows[0].ok === 1;
-}
-
-module.exports = { pool, pingDb };
+module.exports = { pool };

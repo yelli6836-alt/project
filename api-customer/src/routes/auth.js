@@ -5,7 +5,7 @@ const { pool } = require("../db");
 const asyncWrap = require("../utils/asyncWrap");
 const { jwt: jwtCfg } = require("../config");
 
-// POST /auth/register : { email, name, password }
+// POST /auth/register  { email, name, password }
 router.post("/register", asyncWrap(async (req, res) => {
   const email = String(req.body.email || "").trim().toLowerCase();
   const name = String(req.body.name || "").trim();
@@ -41,11 +41,7 @@ router.post("/register", asyncWrap(async (req, res) => {
     );
 
     await conn.commit();
-
-    res.status(201).json({
-      ok: true,
-      customer: { customer_id: customerId, customer_email: email, customer_name: name },
-    });
+    res.status(201).json({ ok: true, customer: { customer_id: customerId, customer_email: email, customer_name: name } });
   } catch (e) {
     try { await conn.rollback(); } catch {}
     throw e;
@@ -54,14 +50,12 @@ router.post("/register", asyncWrap(async (req, res) => {
   }
 }));
 
-// POST /auth/login : { email, password } -> JWT
+// POST /auth/login { email, password } -> HS256 token (옵션: demo에서 안 써도 됨)
 router.post("/login", asyncWrap(async (req, res) => {
   const email = String(req.body.email || "").trim().toLowerCase();
   const password = String(req.body.password || "");
 
-  if (!email || !password) {
-    return res.status(400).json({ ok: false, error: "INVALID_INPUT" });
-  }
+  if (!email || !password) return res.status(400).json({ ok: false, error: "INVALID_INPUT" });
 
   const [rows] = await pool.query(
     `SELECT c.customer_id, c.customer_email, c.customer_name, a.password_hash
@@ -80,23 +74,11 @@ router.post("/login", asyncWrap(async (req, res) => {
 
   const token = jwt.sign(
     { customer_id: u.customer_id, email: u.customer_email },
-    jwtCfg.secret,
+    jwtCfg.secret || "ChangeMe",
     { expiresIn: jwtCfg.expiresIn }
   );
 
-  res.json({
-    ok: true,
-    token,
-    customer: {
-      customer_id: u.customer_id,
-      customer_email: u.customer_email,
-      customer_name: u.customer_name,
-    },
-  });
+  res.json({ ok: true, token, customer: { customer_id: u.customer_id, customer_email: u.customer_email, customer_name: u.customer_name } });
 }));
-
-router.post("/logout", (req, res) => {
-  res.json({ ok: true, message: "client_should_delete_token" });
-});
 
 module.exports = router;
