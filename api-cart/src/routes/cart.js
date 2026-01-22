@@ -79,6 +79,54 @@ router.get(["/", "/cart", "/items", "/cart/items"], authMiddleware, asyncWrap(as
   }
 }));
 
+/**
+ * DELETE 장바구니 아이템 삭제
+ * - 프론트 스펙: DELETE /cart/items?option_id=1
+ * - Kong strip-path=true 에서 /cart/items -> 업스트림 /items 이 될 수 있으므로 /items도 허용
+ * - (선택) cart_item_id 방식도 query로 지원
+ *
+ * 허용 경로:
+ *   DELETE /items?option_id=1
+ *   DELETE /cart/items?option_id=1
+ *   DELETE /items?cart_item_id=123
+ *   DELETE /cart/items?cart_item_id=123
+ */
+router.delete(["/items", "/cart/items"], authMiddleware, asyncWrap(async (req, res) => {
+  const customerId = req.user.customer_id;
+
+  const optionId = Number(req.query.option_id);
+  const cartItemId = Number(req.query.cart_item_id || req.query.cartItemId);
+
+  const hasOptionId = Number.isFinite(optionId) && optionId > 0;
+  const hasCartItemId = Number.isFinite(cartItemId) && cartItemId > 0;
+
+  if (!hasOptionId && !hasCartItemId) {
+    return res.status(400).json({ ok: false, error: "MISSING_DELETE_KEY" });
+  }
+
+  const conn = await pool.getConnection();
+  try {
+    const cartId = await ensureCart(conn, customerId);
+
+    let r;
+    if (hasCartItemId) {
+      [r] = await conn.query(
+        `DELETE FROM cart_item WHERE cart_id = ? AND cart_item_id = ?`,
+        [cartId, cartItemId]
+      );
+    } else {
+      [r] = await conn.query(
+        `DELETE FROM cart_item WHERE cart_id = ? AND option_id = ?`,
+        [cartId, optionId]
+      );
+    }
+
+    return res.json({ ok: true, deleted: r.affectedRows || 0 });
+  } finally {
+    conn.release();
+  }
+}));
+
 // DELETE /cart/clear  (Ingress: /cart/clear -> /clear)
 router.delete("/clear", authMiddleware, asyncWrap(async (req, res) => {
   const customerId = req.user.customer_id;
