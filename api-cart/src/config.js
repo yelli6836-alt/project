@@ -13,6 +13,6 @@ module.exports = {
     connectionLimit: Number(process.env.DB_POOL_LIMIT || 10),
   },
   product: {
-    baseUrl: process.env.PRODUCT_API_BASE || "",
+    baseUrl: ((process.env.PRODUCT_API_BASE || process.env.PRODUCT_API_BASE_URL || "http://api-product:3005").trim()).replace(/\/+$/, ""),
   },
 };
