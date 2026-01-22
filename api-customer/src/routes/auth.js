@@ -4,15 +4,26 @@ const jwt = require("jsonwebtoken");
 const { pool } = require("../db");
 const asyncWrap = require("../utils/asyncWrap");
 const { jwt: jwtCfg } = require("../config");
-
 // POST /auth/register  { email, name, password }
 router.post("/register", asyncWrap(async (req, res) => {
   const email = String(req.body.email || "").trim().toLowerCase();
   const name = String(req.body.name || "").trim();
   const password = String(req.body.password || "");
 
-  if (!email || !name || password.length < 6) {
-    return res.status(400).json({ ok: false, error: "INVALID_INPUT" });
+  if (!email || !name) {
+    return res.status(400).json({
+      ok: false,
+      error: "INVALID_INPUT",
+      message: "Missing required fields (email, name)"
+    });
+  }
+
+  if (password.length < 6) {
+    return res.status(400).json({
+      ok: false,
+      error: "INVALID_INPUT",
+      message: "Password must be at least 6 characters."
+    });
   }
 
   const conn = await pool.getConnection();
@@ -41,7 +52,14 @@ router.post("/register", asyncWrap(async (req, res) => {
     );
 
     await conn.commit();
-    res.status(201).json({ ok: true, customer: { customer_id: customerId, customer_email: email, customer_name: name } });
+    return res.status(201).json({
+      ok: true,
+      customer: {
+        customer_id: customerId,
+        customer_email: email,
+        customer_name: name
+      }
+    });
   } catch (e) {
     try { await conn.rollback(); } catch {}
     throw e;
@@ -50,12 +68,18 @@ router.post("/register", asyncWrap(async (req, res) => {
   }
 }));
 
-// POST /auth/login { email, password } -> HS256 token (옵션: demo에서 안 써도 됨)
+// POST /auth/login { email, password }
 router.post("/login", asyncWrap(async (req, res) => {
   const email = String(req.body.email || "").trim().toLowerCase();
   const password = String(req.body.password || "");
 
-  if (!email || !password) return res.status(400).json({ ok: false, error: "INVALID_INPUT" });
+  if (!email || !password) {
+    return res.status(400).json({
+      ok: false,
+      error: "INVALID_INPUT",
+      message: "Missing required fields (email, password)"
+    });
+  }
 
   const [rows] = await pool.query(
     `SELECT c.customer_id, c.customer_email, c.customer_name, a.password_hash
@@ -66,11 +90,15 @@ router.post("/login", asyncWrap(async (req, res) => {
     [email]
   );
 
-  if (!rows.length) return res.status(401).json({ ok: false, error: "INVALID_CREDENTIALS" });
+  if (!rows.length) {
+    return res.status(401).json({ ok: false, error: "INVALID_CREDENTIALS" });
+  }
 
   const u = rows[0];
   const ok = await bcrypt.compare(password, u.password_hash);
-  if (!ok) return res.status(401).json({ ok: false, error: "INVALID_CREDENTIALS" });
+  if (!ok) {
+    return res.status(401).json({ ok: false, error: "INVALID_CREDENTIALS" });
+  }
 
   const token = jwt.sign(
     { customer_id: u.customer_id, email: u.customer_email },
@@ -78,7 +106,14 @@ router.post("/login", asyncWrap(async (req, res) => {
     { expiresIn: jwtCfg.expiresIn }
   );
 
-  res.json({ ok: true, token, customer: { customer_id: u.customer_id, customer_email: u.customer_email, customer_name: u.customer_name } });
+  return res.json({
+    ok: true,
+    token,
+    customer: {
+      customer_id: u.customer_id,
+      customer_email: u.customer_email,
+      customer_name: u.customer_name
+    }
+  });
 }));
-
 module.exports = router;
