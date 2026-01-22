@@ -7,3 +7,4 @@
 **/dist/
 **/build/
 .DS_Store
+patch_x_user_id.sh
