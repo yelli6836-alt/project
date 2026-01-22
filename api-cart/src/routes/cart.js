@@ -88,7 +88,7 @@ router.delete("/clear", authMiddleware, asyncWrap(async (req, res) => {
 }));
 
 // POST /cart/items { item_id, option_id, qty, (optional) skuid, item_name_snapshot, price_snapshot }
-router.post("/items", authMiddleware, asyncWrap(async (req, res) => {
+router.post(["/items","/cart/items"], authMiddleware, asyncWrap(async (req, res) => {
   const customerId = req.user.customer_id;
   const itemId = Number(req.body.item_id);
   const optionId = Number(req.body.option_id);
