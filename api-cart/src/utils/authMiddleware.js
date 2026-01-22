@@ -8,17 +8,32 @@ function isTrustMode() {
   );
 }
 
-function trustUserFromHeader(req) {
-  const raw = (req.get("X-User-Id") || req.get("X-Customer-Id"));
-  const id = Number(raw);
+function parsePositiveInt(v) {
+  const n = Number(String(v ?? "").trim());
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.floor(n);
+}
+
+function trustUserFromHeader(req, res) {
+  // 공식: X-User-Id
+  // 호환: X-Customer-Id
+  const raw = req.get("X-User-Id") || req.get("X-Customer-Id");
+  const id = parsePositiveInt(raw) || parsePositiveInt(process.env.DEMO_DEFAULT_CUSTOMER_ID) || 1;
+
   req.user = req.user || {};
-  req.user.customer_id = Number.isFinite(id) && id > 0 ? id : 1; // default 1
+  req.user.customer_id = id;
+
+  // (선택) 디버깅/가시성: 응답에도 공식 헤더로 되돌려줌
+  if (res && typeof res.setHeader === "function") {
+    res.setHeader("X-User-Id", String(id));
+  }
+
   return req.user;
 }
 
 function authMiddleware(req, res, next) {
   if (isTrustMode()) {
-    trustUserFromHeader(req);
+    trustUserFromHeader(req, res);
     return next();
   }
 
@@ -31,7 +46,7 @@ function authMiddleware(req, res, next) {
   const secret = process.env.JWT_SECRET || "ChangeMe_SuperSecret";
   try {
     const payload = jwt.verify(token, secret);
-    req.user = payload;
+    req.user = payload || {};
     return next();
   } catch (e) {
     return res.status(401).json({ ok: false, error: "INVALID_TOKEN" });
@@ -40,3 +55,4 @@ function authMiddleware(req, res, next) {
 
 module.exports = authMiddleware;
 module.exports.authMiddleware = authMiddleware;
+

@@ -50,8 +50,18 @@ async function resolveSnapshotFromProduct(itemId, optionId) {
   return { skuid, item_name_snapshot: itemNameSnapshot, price_snapshot: (priceCents / 100).toFixed(2) };
 }
 
-// GET /cart
-router.get("/", authMiddleware, asyncWrap(async (req, res) => {
+/**
+ * GET 장바구니 조회
+ * - Kong strip-path=true 환경에서 외부 /cart/items -> 업스트림 /items 로 들어올 수 있으므로 alias 추가
+ * - 서비스 직통에서 /cart 또는 /cart/items 로도 들어올 수 있으므로 같이 열어둠
+ *
+ * 허용 경로:
+ *   GET /           (Ingress: /cart)
+ *   GET /cart       (svc 직통 호환)
+ *   GET /items      (Ingress: /cart/items -> /items)
+ *   GET /cart/items (svc 직통 호환)
+ */
+router.get(["/", "/cart", "/items", "/cart/items"], authMiddleware, asyncWrap(async (req, res) => {
   const customerId = req.user.customer_id;
   const conn = await pool.getConnection();
   try {
@@ -69,7 +79,7 @@ router.get("/", authMiddleware, asyncWrap(async (req, res) => {
   }
 }));
 
-// DELETE /cart/clear
+// DELETE /cart/clear  (Ingress: /cart/clear -> /clear)
 router.delete("/clear", authMiddleware, asyncWrap(async (req, res) => {
   const customerId = req.user.customer_id;
   const conn = await pool.getConnection();
@@ -88,6 +98,7 @@ router.delete("/clear", authMiddleware, asyncWrap(async (req, res) => {
 }));
 
 // POST /cart/items { item_id, option_id, qty, (optional) skuid, item_name_snapshot, price_snapshot }
+// Ingress: /cart/items -> /items  (strip-path=true) 이므로 /items도 허용
 router.post(["/items","/cart/items"], authMiddleware, asyncWrap(async (req, res) => {
   const customerId = req.user.customer_id;
   const itemId = Number(req.body.item_id);
@@ -149,3 +160,4 @@ router.post(["/items","/cart/items"], authMiddleware, asyncWrap(async (req, res)
 }));
 
 module.exports = router;
+
