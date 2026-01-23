@@ -91,7 +91,20 @@ async function createOrderTx(conn, customerId, items, extra) {
   return { order_id: orderId, order_number: orderNumber, total_amount: totalAmount };
 }
 
-router.get("/", authMiddleware, asyncWrap(async (req, res) => {
+/**
+ * [중요] Kong strip_path=true 대응
+ * - 외부:  POST /order/orders   -> 업스트림: POST /orders
+ * - 기존 구현은 POST "/" 뿐이라 404가 났음
+ *
+ * 그래서 아래처럼 alias를 추가:
+ * - 목록:   GET  "/"  + "/orders"
+ * - 생성:   POST "/"  + "/orders"
+ * - 장바구니기반: POST "/from-cart" + "/orders/from-cart"
+ * - 상세/취소: "/:orderNumber" + "/orders/:orderNumber" 등
+ */
+
+// 주문 목록
+router.get(["/", "/orders"], authMiddleware, asyncWrap(async (req, res) => {
   const customerId = req.user.customer_id;
   const page = Math.max(1, Number(req.query.page || 1));
   const size = Math.min(50, Math.max(1, Number(req.query.size || 20)));
@@ -103,7 +116,7 @@ router.get("/", authMiddleware, asyncWrap(async (req, res) => {
   );
 
   const [rows] = await pool.query(
-    `SELECT order_id, order_number, customer_id, order_status, total_amount, created_at, updated_at
+    `SELECT order_id, order_number, customer_id, order_status, total_amount, receiver_name, shipping_address, created_at, updated_at
        FROM orders
       WHERE customer_id = ?
       ORDER BY order_id DESC
@@ -114,7 +127,8 @@ router.get("/", authMiddleware, asyncWrap(async (req, res) => {
   res.json({ ok: true, page, size, total: countRows[0].total, orders: rows });
 }));
 
-router.post("/", authMiddleware, asyncWrap(async (req, res) => {
+// 주문 생성(바디 items 기반)
+router.post(["/", "/orders"], authMiddleware, asyncWrap(async (req, res) => {
   const customerId = req.user.customer_id;
   const items = normalizeItems(req.body?.items);
   if (!items) return res.status(400).json({ ok: false, error: "INVALID_ITEMS" });
@@ -133,18 +147,22 @@ router.post("/", authMiddleware, asyncWrap(async (req, res) => {
   }
 }));
 
-router.post("/from-cart", authMiddleware, asyncWrap(async (req, res) => {
+// 주문 생성(장바구니 기반)
+router.post(["/from-cart", "/orders/from-cart"], authMiddleware, asyncWrap(async (req, res) => {
   const customerId = req.user.customer_id;
   if (!cartCfg.baseUrl) return res.status(501).json({ ok: false, error: "CART_API_NOT_CONFIGURED" });
 
-  const auth = req.headers.authorization;
-  const xcid = req.headers["x-customer-id"];
+  const auth = req.headers.authorization || "";
+  const xUserId = req.get("X-User-Id");
+  const xCustomerId = req.get("X-Customer-Id");
 
+  // cart는 X-User-Id 공식 + X-Customer-Id alias 지원(이미 반영됨)
   const cartResp = await axios.get(`${cartCfg.baseUrl}/cart`, {
     timeout: 5000,
     headers: {
       ...(auth ? { Authorization: auth } : {}),
-      ...(xcid ? { "X-Customer-Id": xcid } : {}),
+      ...(xUserId ? { "X-User-Id": xUserId } : {}),
+      ...(!xUserId && xCustomerId ? { "X-Customer-Id": xCustomerId } : {}),
     },
   });
 
@@ -173,14 +191,14 @@ router.post("/from-cart", authMiddleware, asyncWrap(async (req, res) => {
         timeout: 5000,
         headers: {
           ...(auth ? { Authorization: auth } : {}),
-          ...(xcid ? { "X-Customer-Id": xcid } : {}),
+          ...(xUserId ? { "X-User-Id": xUserId } : {}),
+          ...(!xUserId && xCustomerId ? { "X-Customer-Id": xCustomerId } : {}),
         },
       });
+      return res.status(201).json({ ok: true, order: created });
     } catch {
       return res.status(201).json({ ok: true, order: created, warn: "ORDER_CREATED_BUT_CART_CLEAR_FAILED" });
     }
-
-    res.status(201).json({ ok: true, order: created });
   } catch (e) {
     try { await conn.rollback(); } catch {}
     throw e;
@@ -189,9 +207,11 @@ router.post("/from-cart", authMiddleware, asyncWrap(async (req, res) => {
   }
 }));
 
-router.post("/:orderNumber/cancel", authMiddleware, asyncWrap(async (req, res) => {
+// 주문 취소
+router.post(["/:orderNumber/cancel", "/orders/:orderNumber/cancel"], authMiddleware, asyncWrap(async (req, res) => {
   const customerId = req.user.customer_id;
   const orderNumber = String(req.params.orderNumber || "").trim();
+  if (!orderNumber) return res.status(400).json({ ok: false, error: "INVALID_ORDER_NUMBER" });
 
   const [upd] = await pool.query(
     `UPDATE orders
@@ -200,34 +220,41 @@ router.post("/:orderNumber/cancel", authMiddleware, asyncWrap(async (req, res) =
     [orderNumber, customerId]
   );
 
-  if (!upd.affectedRows) return res.status(400).json({ ok: false, error: "CANNOT_CANCEL" });
-  res.json({ ok: true, canceled: true, order_number: orderNumber });
+  if (!upd.affectedRows) {
+    return res.status(404).json({ ok: false, error: "NOT_CANCELABLE_OR_NOT_FOUND" });
+  }
+
+  return res.json({ ok: true, canceled: true, order_number: orderNumber });
 }));
 
-router.get("/:orderNumber", authMiddleware, asyncWrap(async (req, res) => {
+// 주문 상세
+router.get(["/:orderNumber", "/orders/:orderNumber"], authMiddleware, asyncWrap(async (req, res) => {
   const customerId = req.user.customer_id;
   const orderNumber = String(req.params.orderNumber || "").trim();
+  if (!orderNumber) return res.status(400).json({ ok: false, error: "INVALID_ORDER_NUMBER" });
 
-  const [orders] = await pool.query(
+  const [rows] = await pool.query(
     `SELECT order_id, order_number, customer_id, order_status, total_amount, receiver_name, shipping_address, created_at, updated_at
        FROM orders
-      WHERE order_number=? AND customer_id=?
+      WHERE order_number = ? AND customer_id = ?
       LIMIT 1`,
     [orderNumber, customerId]
   );
 
-  if (!orders.length) return res.status(404).json({ ok: false, error: "ORDER_NOT_FOUND" });
+  if (!rows.length) return res.status(404).json({ ok: false, error: "NOT_FOUND" });
 
-  const order = orders[0];
+  const order = rows[0];
+
   const [items] = await pool.query(
     `SELECT order_item_id, order_id, item_id, option_id, skuid, item_name, price_at_purchase, qty, created_at
        FROM order_items
-      WHERE order_id=?
+      WHERE order_id = ?
       ORDER BY order_item_id ASC`,
     [order.order_id]
   );
 
-  res.json({ ok: true, order, items });
+  return res.json({ ok: true, order, items });
 }));
 
 module.exports = router;
+
