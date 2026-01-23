@@ -1,3 +1,4 @@
+// api-order/src/routes/orders.js
 const router = require("express").Router();
 const crypto = require("crypto");
 const axios = require("axios");
@@ -186,8 +187,9 @@ router.post(["/from-cart", "/orders/from-cart"], authMiddleware, asyncWrap(async
     await conn.commit();
 
     // cart clear (실패해도 주문은 성공)
+    // ✅ FIX: baseUrl이 이미 /cart prefix를 포함할 수 있으므로 "/cart/clear"가 아니라 "/clear"를 호출해야 함.
     try {
-      await axios.delete(`${cartCfg.baseUrl}/cart/clear`, {
+      await axios.delete(`${cartCfg.baseUrl}/clear`, {
         timeout: 5000,
         headers: {
           ...(auth ? { Authorization: auth } : {}),
