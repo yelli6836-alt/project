@@ -39,11 +39,7 @@ app.use(helmet());
 app.use(cors(corsOptions));
 app.options("*", cors(corsOptions)); // ✅ preflight 처리
 app.use(express.json({ limit: "1mb" }));
-
-// ✅ morgan은 부하 테스트 때 로그 폭증 유발 가능 → ENV로 제어 권장
-if ((process.env.MORGAN_ENABLED || "0") === "1") {
-  app.use(morgan("dev"));
-}
+app.use(morgan("dev"));
 
 // Request ID (k6의 X-Request-Id와 연동 / 없으면 생성)
 // - req.reqId에 저장
@@ -62,31 +58,13 @@ app.use((req, res, next) => {
 });
 
 // ✅ access log (요청 1건당 1줄 JSON)
-// - 라우트들보다 "위"에 있어야 정상적으로 전 요청에 적용됨
-// - 부하 테스트 때는 SAMPLE_RATE / SLOW_MS로 로그량 제어
+// - 라우트(/health, /) 타기 전에 있어야 모든 요청이 찍힘
+// - 404 포함해서 "응답이 끝나는 시점"에 dur_ms 계산
 app.use((req, res, next) => {
-  const enabled = (process.env.ACCESS_LOG_ENABLED || "0") === "1";
-  if (!enabled) return next();
-
-  // (선택) health/metrics/options는 보통 제외
-  const skipHealth = (process.env.ACCESS_LOG_SKIP_HEALTH || "1") === "1";
-  if (skipHealth && (req.originalUrl === "/health" || req.originalUrl.startsWith("/health/"))) {
-    return next();
-  }
-  if (req.method === "OPTIONS") return next();
-
-  const slowMs = Number(process.env.ACCESS_LOG_SLOW_MS || "0"); // 0이면 전부 찍힘
-  const rate = Number(process.env.ACCESS_LOG_SAMPLE_RATE || "1"); // 1이면 100%
-  const shouldSample = !(rate < 1) || Math.random() < rate;
-
   const t0 = process.hrtime.bigint();
 
   res.on("finish", () => {
     const ms = Number(process.hrtime.bigint() - t0) / 1e6;
-
-    // 샘플링/슬로우컷
-    if (!shouldSample) return;
-    if (Number.isFinite(slowMs) && ms < slowMs) return;
 
     console.log(
       JSON.stringify({
