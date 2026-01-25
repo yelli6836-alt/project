@@ -77,7 +77,7 @@ router.get(["/", "/cart", "/items", "/cart/items"], authMiddleware, asyncWrap(as
   } finally {
     conn.release();
   }
-})));
+}));
 
 /**
  * DELETE 장바구니 아이템 삭제
@@ -125,7 +125,7 @@ router.delete(["/items", "/cart/items"], authMiddleware, asyncWrap(async (req, r
   } finally {
     conn.release();
   }
-})));
+}));
 
 /**
  * PATCH 장바구니 수량 변경/차감
