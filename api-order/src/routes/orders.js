@@ -93,6 +93,53 @@ async function createOrderTx(conn, customerId, items, extra) {
 }
 
 /**
+ * ============================================================
+ * ✅ 배송 상태(목록 동기화) - DB 수정 없이 "조회 시점에 계산"
+ * - api-delivery의 1분 타임라인과 동일한 단계로 맞춤
+ * - orderNumber: "ORD-<ms>-.." 에서 <ms>를 기준시각으로 사용
+ * - fallback: created_at 파싱
+ * ============================================================
+ */
+const DELIVERY_TIMELINE_MIN = [
+  { m: 0, status: "상품준비중", phase: "READY", available: false },
+  { m: 1, status: "배송준비중(출고준비)", phase: "READY", available: false },
+  { m: 2, status: "집화완료(출고지 픽업/상차완료)", phase: "READY", available: false },
+  { m: 3, status: "간선상차/이동중(배송중)", phase: "SHIPPING", available: true },
+  { m: 4, status: "배송출발(캠프 출발)", phase: "SHIPPING", available: true },
+  { m: 5, status: "배송완료", phase: "DELIVERED", available: true },
+];
+
+function parseBaseMsFromOrderNumber(orderNumber) {
+  const m = String(orderNumber || "").match(/^ORD-(\d{10,})-/);
+  const ms = m ? Number(m[1]) : NaN;
+  return Number.isFinite(ms) ? ms : NaN;
+}
+
+function computeDeliveryStatus(orderNumber, createdAt) {
+  const now = Date.now();
+
+  // 1) orderNumber에서 생성시각(ms) 우선 파싱 (delivery 서비스와 동기화 목적)
+  let base = parseBaseMsFromOrderNumber(orderNumber);
+
+  // 2) fallback: created_at 파싱
+  if (!Number.isFinite(base)) {
+    const t = createdAt ? Date.parse(createdAt) : NaN;
+    base = Number.isFinite(t) ? t : now;
+  }
+
+  const diffMin = Math.floor((now - base) / (60 * 1000));
+  const idx = Math.max(0, Math.min(5, diffMin));
+  const cur = DELIVERY_TIMELINE_MIN[idx];
+
+  return {
+    delivery_status: cur.status,
+    delivery_phase: cur.phase, // "READY" | "SHIPPING" | "DELIVERED"
+    delivery_available: cur.available, // 배송조회 버튼 활성화용
+    delivery_step_min: idx, // (선택) 디버깅/테스트용
+  };
+}
+
+/**
  * [중요] Kong strip_path=true 대응
  * - 외부:  POST /order/orders   -> 업스트림: POST /orders
  * - 그래서 아래처럼 alias를 추가:
@@ -123,7 +170,13 @@ router.get(["/", "/orders"], authMiddleware, asyncWrap(async (req, res) => {
     [customerId, size, offset]
   );
 
-  res.json({ ok: true, page, size, total: countRows[0].total, orders: rows });
+  // ✅ 목록에서도 배송 상태가 시간이 지남에 따라 자동 갱신되도록 "동적 배송 상태"를 합성
+  const orders = rows.map((o) => ({
+    ...o,
+    ...computeDeliveryStatus(o.order_number, o.created_at),
+  }));
+
+  res.json({ ok: true, page, size, total: countRows[0].total, orders });
 }));
 
 // 주문 생성(바디 items 기반)
