@@ -7,12 +7,13 @@ const NEXT = { READY: "SHIPPING", SHIPPING: "DELIVERED" };
 
 // ✅ 데모/테스트용: 1분 단위 타임라인(0~5분)
 const DELIVERY_TIMELINE_MIN = [
-  { m: 0, status: "배송준비중", location: "동탄 물류센터" },
-  { m: 1, status: "상품준비중", location: "동탄 물류센터" },
-  { m: 2, status: "집화완료",   location: "동탄 물류센터" },
-  { m: 3, status: "배송중",     location: "수도권 메가허브" },
-  { m: 4, status: "배송출발",   location: "송파 캠프" },
-  { m: 5, status: "배송완료",   location: "수령지" },
+  { m: 0, status: "상품준비중",                    location: "동탄 물류센터" },
+  { m: 1, status: "배송준비중(출고준비)",          location: "동탄 물류센터" },
+  { m: 2, status: "집화완료(출고지 픽업/상차완료)", location: "동탄 물류센터" },
+  { m: 3, status: "간선상차/이동중(배송중)",       location: "수도권 메가허브" },
+  { m: 4, status: "배송출발(캠프 출발)",           location: "송파 캠프" },
+  // 배송완료 location은 customer_address 있으면 자동으로 주소로 바뀜(없으면 fallback)
+  { m: 5, status: "배송완료",                      location: "수령지" },
 ];
 
 function pickCarrier(orderNumber) {
@@ -26,7 +27,7 @@ function makeTrackingNumber(orderNumber) {
   // orderNumber로부터 고정된 트래킹번호 생성(새로고침해도 동일)
   const h = crypto.createHash("sha1").update(String(orderNumber)).digest("hex");
   const digits = h.replace(/[a-f]/g, "").padEnd(12, "0").slice(0, 12);
-  return `${digits.slice(0,4)}-${digits.slice(4,8)}-${digits.slice(8,12)}`;
+  return `${digits.slice(0, 4)}-${digits.slice(4, 8)}-${digits.slice(8, 12)}`;
 }
 
 function parseCreatedAtMs(orderNumber, orderedAt) {
@@ -48,23 +49,21 @@ function buildDelivery(orderNumber, orderedAt, customerAddress) {
   const base = parseCreatedAtMs(orderNumber, orderedAt);
 
   const history = DELIVERY_TIMELINE_MIN
-    .map(e => {
+    .map((e) => {
       const t = base + e.m * 60 * 1000;
       const location =
-        (e.status === "배송완료" && customerAddress)
-          ? String(customerAddress)
-          : e.location;
+        e.status === "배송완료" && customerAddress ? String(customerAddress) : e.location;
 
       return { t, time: new Date(t).toISOString(), status: e.status, location };
     })
-    .filter(e => e.t <= nowMs)
+    .filter((e) => e.t <= nowMs)
     .map(({ time, status, location }) => ({ time, status, location }));
 
-  // 최소 1개는 보장
+  // ✅ 최소 1개는 보장 (타임라인 0분 상태와 일치시키기)
   if (!history.length) {
     history.push({
       time: new Date(base).toISOString(),
-      status: "배송준비중",
+      status: "상품준비중",
       location: "동탄 물류센터",
     });
   }
@@ -86,11 +85,12 @@ async function getOrder(req, res) {
       WHERE order_number = ?`,
     [orderNumber]
   );
+
   if (!rows.length) return res.status(404).json({ ok: false, error: "ORDER_NOT_FOUND" });
 
   const order = rows[0];
 
-  // ✅ 핵심: 배송추적 정보를 "조회 시점에 계산"해서 order에 붙임(DB 수정 없음)
+  // ✅ 배송추적 정보를 "조회 시점에 계산"해서 order에 붙임(DB 수정 없음)
   order.delivery = buildDelivery(order.order_number, order.ordered_at, order.customer_address);
 
   return res.json({ ok: true, order });
@@ -108,19 +108,33 @@ async function updateStatus(req, res) {
       `SELECT order_id, order_status FROM orders WHERE order_number=? FOR UPDATE`,
       [orderNumber]
     );
-    if (!rows.length) { await conn.rollback(); return res.status(404).json({ ok: false, error: "ORDER_NOT_FOUND" }); }
+
+    if (!rows.length) {
+      await conn.rollback();
+      return res.status(404).json({ ok: false, error: "ORDER_NOT_FOUND" });
+    }
 
     const cur = String(rows[0].order_status || "").toUpperCase();
     if (NEXT[cur] !== nextStatus) {
       await conn.rollback();
-      return res.status(409).json({ ok: false, error: "INVALID_TRANSITION", message: `current=${cur}, allowed=${NEXT[cur] || "none"}` });
+      return res.status(409).json({
+        ok: false,
+        error: "INVALID_TRANSITION",
+        message: `current=${cur}, allowed=${NEXT[cur] || "none"}`,
+      });
     }
 
-    await conn.query(`UPDATE orders SET order_status=? WHERE order_id=?`, [nextStatus, rows[0].order_id]);
+    await conn.query(`UPDATE orders SET order_status=? WHERE order_id=?`, [
+      nextStatus,
+      rows[0].order_id,
+    ]);
+
     await conn.commit();
     res.json({ ok: true, orderNumber, status: nextStatus });
   } catch (e) {
-    try { await conn.rollback(); } catch {}
+    try {
+      await conn.rollback();
+    } catch {}
     throw e;
   } finally {
     conn.release();
