@@ -95,9 +95,7 @@ async function createOrderTx(conn, customerId, items, extra) {
 /**
  * [중요] Kong strip_path=true 대응
  * - 외부:  POST /order/orders   -> 업스트림: POST /orders
- * - 기존 구현은 POST "/" 뿐이라 404가 났음
- *
- * 그래서 아래처럼 alias를 추가:
+ * - 그래서 아래처럼 alias를 추가:
  * - 목록:   GET  "/"  + "/orders"
  * - 생성:   POST "/"  + "/orders"
  * - 장바구니기반: POST "/from-cart" + "/orders/from-cart"
@@ -148,7 +146,7 @@ router.post(["/", "/orders"], authMiddleware, asyncWrap(async (req, res) => {
   }
 }));
 
-// 주문 생성(장바구니 기반)
+// 주문 생성(장바구니 기반) + 부분 주문(option_ids) 지원
 router.post(["/from-cart", "/orders/from-cart"], authMiddleware, asyncWrap(async (req, res) => {
   const customerId = req.user.customer_id;
   if (!cartCfg.baseUrl) return res.status(501).json({ ok: false, error: "CART_API_NOT_CONFIGURED" });
@@ -167,8 +165,23 @@ router.post(["/from-cart", "/orders/from-cart"], authMiddleware, asyncWrap(async
     },
   });
 
-  const cartItems = Array.isArray(cartResp?.data?.items) ? cartResp.data.items : [];
-  if (!cartItems.length) return res.status(400).json({ ok: false, error: "CART_EMPTY" });
+  const cartItemsAll = Array.isArray(cartResp?.data?.items) ? cartResp.data.items : [];
+  if (!cartItemsAll.length) return res.status(400).json({ ok: false, error: "CART_EMPTY" });
+
+  // ✅ 부분 주문: option_ids 지원 (없으면 전체 주문)
+  const optionIds = Array.isArray(req.body?.option_ids)
+    ? req.body.option_ids.map((v) => Number(v)).filter((n) => Number.isFinite(n) && n > 0)
+    : [];
+
+  const partial = optionIds.length > 0;
+
+  const cartItems = partial
+    ? cartItemsAll.filter((it) => optionIds.includes(Number(it.option_id)))
+    : cartItemsAll;
+
+  if (partial && !cartItems.length) {
+    return res.status(400).json({ ok: false, error: "CART_SELECTION_EMPTY" });
+  }
 
   const items = normalizeItems(cartItems.map((it) => ({
     skuid: it.skuid,
@@ -186,18 +199,49 @@ router.post(["/from-cart", "/orders/from-cart"], authMiddleware, asyncWrap(async
     const created = await createOrderTx(conn, customerId, items, req.body);
     await conn.commit();
 
-    // cart clear (실패해도 주문은 성공)
-    // ✅ FIX: baseUrl이 이미 /cart prefix를 포함할 수 있으므로 "/cart/clear"가 아니라 "/clear"를 호출해야 함.
+    // ✅ 주문 성공 후 cart 정리
+    // - 전체 주문이면 clear
+    // - 부분 주문이면 선택된 option_id만 삭제
+    const headers = {
+      ...(auth ? { Authorization: auth } : {}),
+      ...(xUserId ? { "X-User-Id": xUserId } : {}),
+      ...(!xUserId && xCustomerId ? { "X-Customer-Id": xCustomerId } : {}),
+    };
+
     try {
-      await axios.delete(`${cartCfg.baseUrl}/clear`, {
-        timeout: 5000,
-        headers: {
-          ...(auth ? { Authorization: auth } : {}),
-          ...(xUserId ? { "X-User-Id": xUserId } : {}),
-          ...(!xUserId && xCustomerId ? { "X-Customer-Id": xCustomerId } : {}),
-        },
-      });
-      return res.status(201).json({ ok: true, order: created });
+      if (!partial) {
+        // ✅ FIX: baseUrl이 이미 /cart prefix를 포함할 수 있으므로 "/cart/clear"가 아니라 "/clear"를 호출해야 함.
+        await axios.delete(`${cartCfg.baseUrl}/clear`, { timeout: 5000, headers });
+        return res.status(201).json({ ok: true, order: created });
+      }
+
+      // partial delete: DELETE /items?option_id=...
+      // (cart 라우터가 /items, /cart/items 둘다 지원하므로 /items로 고정)
+      const failed = [];
+      for (const oid of optionIds) {
+        try {
+          await axios.delete(`${cartCfg.baseUrl}/items`, {
+            timeout: 5000,
+            headers,
+            params: { option_id: oid },
+          });
+        } catch {
+          failed.push(oid);
+        }
+      }
+
+      if (failed.length) {
+        return res.status(201).json({
+          ok: true,
+          order: created,
+          partial: true,
+          option_ids: optionIds,
+          warn: "ORDER_CREATED_BUT_CART_PARTIAL_DELETE_FAILED",
+          failed_option_ids: failed,
+        });
+      }
+
+      return res.status(201).json({ ok: true, order: created, partial: true, option_ids: optionIds });
     } catch {
       return res.status(201).json({ ok: true, order: created, warn: "ORDER_CREATED_BUT_CART_CLEAR_FAILED" });
     }

@@ -77,7 +77,7 @@ router.get(["/", "/cart", "/items", "/cart/items"], authMiddleware, asyncWrap(as
   } finally {
     conn.release();
   }
-}));
+})));
 
 /**
  * DELETE 장바구니 아이템 삭제
@@ -122,6 +122,119 @@ router.delete(["/items", "/cart/items"], authMiddleware, asyncWrap(async (req, r
     }
 
     return res.json({ ok: true, deleted: r.affectedRows || 0 });
+  } finally {
+    conn.release();
+  }
+})));
+
+/**
+ * PATCH 장바구니 수량 변경/차감
+ * - Kong strip-path=true 에서 /cart/items -> 업스트림 /items 이 될 수 있으므로 /items도 허용
+ *
+ * Request Body (둘 중 하나)
+ * 1) qty(절대값 세팅)
+ *   { option_id: 1, qty: 3 }
+ *   { cart_item_id: 123, qty: 0 }   // 0이면 삭제
+ *
+ * 2) delta(증감/차감)
+ *   { option_id: 1, delta: -1 }     // 차감
+ *   { cart_item_id: 123, delta: +2 }
+ */
+router.patch(["/items", "/cart/items"], authMiddleware, asyncWrap(async (req, res) => {
+  const customerId = req.user.customer_id;
+
+  const optionId = Number(req.body.option_id ?? req.query.option_id);
+  const cartItemId = Number(req.body.cart_item_id ?? req.body.cartItemId ?? req.query.cart_item_id ?? req.query.cartItemId);
+
+  const hasOptionId = Number.isFinite(optionId) && optionId > 0;
+  const hasCartItemId = Number.isFinite(cartItemId) && cartItemId > 0;
+
+  if (!hasOptionId && !hasCartItemId) {
+    return res.status(400).json({ ok: false, error: "MISSING_UPDATE_KEY" });
+  }
+
+  const hasQty = req.body.qty !== undefined && req.body.qty !== null && req.body.qty !== "";
+  const hasDelta = req.body.delta !== undefined && req.body.delta !== null && req.body.delta !== "";
+
+  if (!hasQty && !hasDelta) {
+    return res.status(400).json({ ok: false, error: "MISSING_QTY_OR_DELTA" });
+  }
+
+  const qty = hasQty ? Number(req.body.qty) : null;
+  const delta = hasDelta ? Number(req.body.delta) : null;
+
+  if (hasQty && (!Number.isFinite(qty) || qty < 0 || qty > 999)) {
+    return res.status(400).json({ ok: false, error: "INVALID_QTY" });
+  }
+  if (hasDelta && (!Number.isFinite(delta) || delta === 0 || Math.abs(delta) > 999)) {
+    return res.status(400).json({ ok: false, error: "INVALID_DELTA" });
+  }
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const cartId = await ensureCart(conn, customerId);
+
+    // 현재 row 찾기
+    let rows;
+    if (hasCartItemId) {
+      [rows] = await conn.query(
+        `SELECT cart_item_id, option_id, qty FROM cart_item WHERE cart_id=? AND cart_item_id=? LIMIT 1`,
+        [cartId, cartItemId]
+      );
+    } else {
+      [rows] = await conn.query(
+        `SELECT cart_item_id, option_id, qty FROM cart_item WHERE cart_id=? AND option_id=? LIMIT 1`,
+        [cartId, optionId]
+      );
+    }
+
+    if (!rows.length) {
+      await conn.rollback();
+      return res.status(404).json({ ok: false, error: "CART_ITEM_NOT_FOUND" });
+    }
+
+    const cur = rows[0];
+    const currentQty = Number(cur.qty || 0);
+    let newQty = hasQty ? qty : (currentQty + delta);
+
+    if (!Number.isFinite(newQty) || newQty < 0 || newQty > 999) {
+      await conn.rollback();
+      return res.status(400).json({ ok: false, error: "QTY_OUT_OF_RANGE" });
+    }
+
+    if (newQty === 0) {
+      await conn.query(
+        `DELETE FROM cart_item WHERE cart_id=? AND cart_item_id=?`,
+        [cartId, cur.cart_item_id]
+      );
+      await conn.commit();
+      return res.json({
+        ok: true,
+        updated: true,
+        deleted: true,
+        cart_item_id: cur.cart_item_id,
+        option_id: cur.option_id,
+        qty: 0
+      });
+    }
+
+    await conn.query(
+      `UPDATE cart_item SET qty=?, updated_at=CURRENT_TIMESTAMP WHERE cart_id=? AND cart_item_id=?`,
+      [newQty, cartId, cur.cart_item_id]
+    );
+
+    await conn.commit();
+    return res.json({
+      ok: true,
+      updated: true,
+      cart_item_id: cur.cart_item_id,
+      option_id: cur.option_id,
+      qty: newQty
+    });
+  } catch (e) {
+    try { await conn.rollback(); } catch {}
+    throw e;
   } finally {
     conn.release();
   }
