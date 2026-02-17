@@ -59,3 +59,16 @@ services:
     env_file: ./api-wms/.env
     command: ["node","src/consumer.js"]
     depends_on: [rabbitmq]
+
+  api-web:
+    build: ./api-web
+    env_file: ./api-web/.env
+    ports:
+      - "3010:3010"
+    depends_on:
+      - api-product
+      - api-cart
+      - api-order
+      - api-delivery
+      - api-payment
+      - api-customer
